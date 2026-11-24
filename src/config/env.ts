@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Support both FRONTEND_URL and CLIENT_URL from env
-const rawFrontendUrls = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+const rawFrontendUrls =  process.env.CLIENT_URL || 'http://localhost:5173';
 
 export const config = {
   port: Number(process.env.PORT) || 5000,
