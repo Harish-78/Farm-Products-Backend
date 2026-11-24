@@ -7,25 +7,22 @@ import hpp from 'hpp';
 
 import { config } from './config/env.js';
 import { logger } from './config/logger.js';
-import { initDb } from './db/index.js';
 import { httpLogger } from './middleware/requestLogger.js';
 import { generalLimiter } from './middleware/rateLimiter.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import authRoutes from './routes/authRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
 import farmRoutes from './routes/farmRoutes.js';
-import { initFeedCronJob } from './services/feedCron.js';
 
 const app = express();
 
-// 1. Trust proxy if behind a reverse proxy (e.g. Nginx, Heroku, Railway, Vercel)
+// 1. Trust proxy if behind a reverse proxy (e.g. Vercel)
 app.set('trust proxy', 1);
 
-// 2. CORS configuration with multi-client support & credentials (MUST be before helmet and routes)
+// 2. CORS configuration with multi-client support & credentials
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
       if (!origin) return callback(null, true);
 
       const normalizedOrigin = origin.replace(/\/$/, '');
@@ -51,20 +48,20 @@ app.use(
   })
 );
 
-// 3. Security headers (configure helmet to allow CORS and cross-origin embedding)
+// 3. Security headers
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
   })
 );
 
-// 4. Response compression (gzip/brotli)
+// 4. Response compression
 app.use(compression());
 
-// 5. Pino HTTP Request Logger (assigns X-Request-Id and pretty-prints logs)
+// 5. Pino HTTP Request Logger
 app.use(httpLogger);
 
-// 6. Body parsers with sensible size limits (prevents payload flood)
+// 6. Body parsers
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
@@ -88,7 +85,7 @@ app.get('/', (_req, res) => {
   });
 });
 
-// Health check endpoints (both /health and /api/health)
+// Health check endpoints
 const healthHandler = (_req: express.Request, res: express.Response) => {
   res.json({
     status: 'healthy',
@@ -117,34 +114,5 @@ app.use(notFoundHandler);
 // 11. Centralized Global Error Handler
 app.use(errorHandler);
 
-// Export the Express app as default for serverless runtimes (e.g. Vercel api/ functions)
+// Export the Express app as default for Vercel serverless functions
 export default app;
-
-// Server startup — only when run directly (npm run dev / npm start).
-// On Vercel the api/ functions import and invoke `app` directly.
-async function start() {
-  await initDb();
-  initFeedCronJob();
-  app.listen(config.port, () => {
-    logger.info(`Backend server running at http://localhost:${config.port}`);
-    logger.info(`Client URL: ${config.clientUrl}`);
-    logger.info(`Pino HTTP logging & security middlewares enabled`);
-  });
-}
-
-if (process.env.VERCEL !== '1') {
-  start().catch((err) => {
-    logger.error({ err }, 'Failed to start server');
-    process.exit(1);
-  });
-}
-
-// Catch unexpected process exceptions
-process.on('uncaughtException', (err) => {
-  logger.error({ err }, 'Uncaught Exception detected! Shutting down...');
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason }, 'Unhandled Rejection detected!');
-});
