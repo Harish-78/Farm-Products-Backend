@@ -17,6 +17,7 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
   sameSite: 'lax' as const,
+  path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
 };
 
@@ -177,7 +178,7 @@ export async function signup(req: Request, res: Response): Promise<void> {
     );
 
     const token = generateToken(newUser);
-    res.cookie('token', token, COOKIE_OPTIONS);
+    res.cookie(config.authCookieName, token, COOKIE_OPTIONS);
 
     const elapsed = Date.now() - startTime;
     logger.info(
@@ -254,7 +255,7 @@ export async function login(req: Request, res: Response): Promise<void> {
     );
 
     const token = generateToken(user);
-    res.cookie('token', token, COOKIE_OPTIONS);
+    res.cookie(config.authCookieName, token, COOKIE_OPTIONS);
 
     const { password_hash, ...safeUser } = user;
     const elapsed = Date.now() - startTime;
@@ -283,9 +284,11 @@ export async function logout(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
   logger.info({ controller: 'logout', action: 'initialized' }, '[Logout] Controller initialized');
 
-  res.clearCookie('token', {
+  res.clearCookie(config.authCookieName, {
     httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
+    path: '/',
   });
 
   const elapsed = Date.now() - startTime;
@@ -576,7 +579,7 @@ export async function googleCallback(req: Request, res: Response): Promise<void>
 
     // Issue JWT cookie and redirect to client
     const token = generateToken(user);
-    res.cookie('token', token, COOKIE_OPTIONS);
+    res.cookie(config.authCookieName, token, COOKIE_OPTIONS);
 
     const elapsed = Date.now() - startTime;
     logger.info(

@@ -1,10 +1,15 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Support both FRONTEND_URL and CLIENT_URL from env
+const rawFrontendUrls = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'http://localhost:5173';
+
 export const config = {
   port: Number(process.env.PORT) || 5000,
-  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
-  clientUrls: (process.env.CLIENT_URL || 'http://localhost:5173')
+  nodeEnv: process.env.NODE_ENV || 'development',
+  authCookieName: process.env.AUTH_COOKIE_NAME || 'token',
+  clientUrl: rawFrontendUrls.split(',')[0].trim().replace(/\/$/, ''),
+  clientUrls: rawFrontendUrls
     .split(',')
     .map((url) => url.trim().replace(/\/$/, ''))
     .filter(Boolean),

@@ -12,7 +12,8 @@ export interface AuthRequest extends Request {
 }
 
 export function authMiddleware(req: AuthRequest, res: Response, next: NextFunction): void {
-  const token = req.cookies?.token;
+  const cookieName = config.authCookieName;
+  const token = req.cookies?.[cookieName];
 
   if (!token) {
     res.status(401).json({ success: false, message: 'Authentication required. No token found in cookies.' });
