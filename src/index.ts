@@ -77,10 +77,30 @@ app.use(hpp());
 // 9. Global Rate Limiter
 app.use('/api', generalLimiter);
 
-// Health check endpoint
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// Root endpoint — Application Status
+app.get('/', (_req, res) => {
+  res.json({
+    status: 'running',
+    service: 'Poongodi Farm Products Backend API',
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    environment: config.nodeEnv,
+  });
 });
+
+// Health check endpoints (both /health and /api/health)
+const healthHandler = (_req: express.Request, res: express.Response) => {
+  res.json({
+    status: 'healthy',
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    service: 'Poongodi Farm Products Backend API',
+    environment: config.nodeEnv,
+  });
+};
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
 
 // Authentication routes
 app.use('/api/auth', authRoutes);
