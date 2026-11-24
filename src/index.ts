@@ -13,28 +13,56 @@ import { generalLimiter } from './middleware/rateLimiter.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import authRoutes from './routes/authRoutes.js';
 import orderRoutes from './routes/orderRoutes.js';
+import farmRoutes from './routes/farmRoutes.js';
+import { initFeedCronJob } from './services/feedCron.js';
 
 const app = express();
 
-// 1. Trust proxy if behind a reverse proxy (e.g. Nginx, Heroku, Railway)
+// 1. Trust proxy if behind a reverse proxy (e.g. Nginx, Heroku, Railway, Vercel)
 app.set('trust proxy', 1);
 
-// 2. Security headers
-app.use(helmet());
-
-// 3. Response compression (gzip/brotli)
-app.use(compression());
-
-// 4. Pino HTTP Request Logger (assigns X-Request-Id and pretty-prints logs)
-app.use(httpLogger);
-
-// 5. CORS configuration with credentials support
+// 2. CORS configuration with multi-client support & credentials (MUST be before helmet and routes)
 app.use(
   cors({
-    origin: config.clientUrl,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+      if (!origin) return callback(null, true);
+
+      const normalizedOrigin = origin.replace(/\/$/, '');
+      const isAllowed = config.clientUrls.some((allowed) => {
+        if (allowed === '*') return true;
+        return (
+          allowed === normalizedOrigin ||
+          normalizedOrigin.startsWith(allowed) ||
+          (allowed.includes('localhost') && normalizedOrigin.includes('localhost'))
+        );
+      });
+
+      if (isAllowed) {
+        return callback(null, true);
+      }
+
+      logger.warn({ origin, allowedOrigins: config.clientUrls }, '[CORS] Blocked request from unauthorized origin');
+      return callback(null, false);
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
   })
 );
+
+// 3. Security headers (configure helmet to allow CORS and cross-origin embedding)
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  })
+);
+
+// 4. Response compression (gzip/brotli)
+app.use(compression());
+
+// 5. Pino HTTP Request Logger (assigns X-Request-Id and pretty-prints logs)
+app.use(httpLogger);
 
 // 6. Body parsers with sensible size limits (prevents payload flood)
 app.use(express.json({ limit: '10kb' }));
@@ -60,6 +88,9 @@ app.use('/api/auth', authRoutes);
 // Admin Orders & Analytics routes
 app.use('/api/orders', orderRoutes);
 
+// Farm Business, Quails, Feeds & Expense Management routes
+app.use('/api/farm', farmRoutes);
+
 // 10. 404 Route Not Found Handler
 app.use(notFoundHandler);
 
@@ -69,6 +100,7 @@ app.use(errorHandler);
 // Server startup
 async function start() {
   await initDb();
+  initFeedCronJob();
   app.listen(config.port, () => {
     logger.info(`Backend server running at http://localhost:${config.port}`);
     logger.info(`Client URL: ${config.clientUrl}`);

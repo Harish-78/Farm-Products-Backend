@@ -468,7 +468,7 @@ export async function getGoogleAuthUrl(_req: Request, res: Response): Promise<vo
     client_id: config.google.clientId,
     access_type: 'offline',
     response_type: 'code',
-    prompt: 'consent',
+    prompt: 'select_account',
     scope: [
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/userinfo.email',
