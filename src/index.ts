@@ -117,8 +117,8 @@ app.use(notFoundHandler);
 // 11. Centralized Global Error Handler
 app.use(errorHandler);
 
-// Export the Express app for serverless runtimes (e.g. Vercel api/ functions)
-export { app };
+// Export the Express app as default for serverless runtimes (e.g. Vercel api/ functions)
+export default app;
 
 // Server startup — only when run directly (npm run dev / npm start).
 // On Vercel the api/ functions import and invoke `app` directly.
