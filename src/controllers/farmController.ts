@@ -233,6 +233,93 @@ export async function deleteExpense(req: AuthRequest, res: Response): Promise<vo
   }
 }
 
+export async function updateExpense(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const { category, title, amount, expense_date, payment_method, business_unit, notes } = req.body;
+  const userId = req.user?.id;
+
+  try {
+    const result = await pool.query(
+      `UPDATE expenses
+       SET category = COALESCE($1, category),
+           title = COALESCE($2, title),
+           amount = COALESCE($3, amount),
+           expense_date = COALESCE($4, expense_date),
+           payment_method = COALESCE($5, payment_method),
+           business_unit = COALESCE($6, business_unit),
+           notes = COALESCE($7, notes),
+           updated_by = $8,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $9 AND is_deleted = FALSE
+       RETURNING *`,
+      [category, title, amount, expense_date, payment_method, business_unit, notes, userId, id]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Expense not found or already deleted' });
+      return;
+    }
+
+    res.json({ success: true, message: 'Expense updated successfully', expense: result.rows[0] });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+// ==========================================
+// 5. SOFT DELETE OPERATIONS (Farm Module)
+// ==========================================
+
+export async function deleteLivestock(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const userId = req.user?.id;
+
+  try {
+    const result = await pool.query(
+      `UPDATE livestock
+       SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1
+       WHERE id = $2 AND is_deleted = FALSE
+       RETURNING id`,
+      [userId, id]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Livestock batch not found or already deleted' });
+      return;
+    }
+
+    res.json({ success: true, message: 'Livestock batch deleted successfully (soft delete)' });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '[Livestock] Error soft-deleting batch');
+    res.status(500).json({ success: false, message: 'Failed to delete livestock batch' });
+  }
+}
+
+export async function deleteFeed(req: AuthRequest, res: Response): Promise<void> {
+  const { id } = req.params;
+  const userId = req.user?.id;
+
+  try {
+    const result = await pool.query(
+      `UPDATE feed_inventory
+       SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1
+       WHERE id = $2 AND is_deleted = FALSE
+       RETURNING id`,
+      [userId, id]
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ success: false, message: 'Feed item not found or already deleted' });
+      return;
+    }
+
+    res.json({ success: true, message: 'Feed item deleted successfully (soft delete)' });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '[Feed] Error soft-deleting feed item');
+    res.status(500).json({ success: false, message: 'Failed to delete feed item' });
+  }
+}
+
 // ==========================================
 // 4. FINANCIAL P&L & NET PROFIT DASHBOARD
 // ==========================================
