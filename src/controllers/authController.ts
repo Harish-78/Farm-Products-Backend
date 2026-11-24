@@ -32,9 +32,11 @@ function generateToken(user: { id: number; email: string }): string {
     );
     logger.debug({ userId: user.id }, "[Auth] JWT generated successfully");
     return token;
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
     logger.error(
-      { userId: user.id, error: err?.message, stack: err?.stack },
+      { userId: user.id, error: message, stack },
       "[Auth] Failed to generate JWT",
     );
     throw err;
@@ -45,25 +47,31 @@ function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+function getErrorInfo(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return { message: error.message, stack: error.stack };
+  }
+  return { message: String(error) };
+}
+
 export async function requestSignupOtp(
   req: Request,
   res: Response,
 ): Promise<void> {
   const startTime = Date.now();
-  const { email } = req.body as { email?: string };
+  const { email } = (req.body ?? {}) as { email?: string };
   logger.info(
-    { controller: "requestSignupOtp", action: "initialized", email },
+    { controller: "requestSignupOtp", action: "initialized" },
     "[RequestOTP] Initialized",
   );
 
   if (!email) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "requestSignupOtp",
         action: "validation_failed",
         reason: "missing_email",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[RequestOTP] Missing email",
     );
@@ -80,22 +88,18 @@ export async function requestSignupOtp(
     );
 
     if (existing.rows.length > 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "requestSignupOtp",
-          email: normalizedEmail,
-          reason: "user_exists",
-          durationMs: elapsed,
+          action: "user_exists",
+          durationMs: Date.now() - startTime,
         },
         "[RequestOTP] User already exists",
       );
-      res
-        .status(409)
-        .json({
-          success: false,
-          message: "An account with this email already exists",
-        });
+      res.status(409).json({
+        success: false,
+        message: "An account with this email already exists",
+      });
       return;
     }
 
@@ -112,31 +116,13 @@ export async function requestSignupOtp(
       [normalizedEmail, otp, "signup", expiresAt],
     );
 
-    try {
-      await sendOtpEmail(normalizedEmail, otp);
-      logger.debug(
-        { controller: "requestSignupOtp", email: normalizedEmail },
-        "[RequestOTP] OTP email sent",
-      );
-    } catch (mailErr: any) {
-      logger.error(
-        {
-          controller: "requestSignupOtp",
-          email: normalizedEmail,
-          error: mailErr?.message,
-          stack: mailErr?.stack,
-        },
-        "[RequestOTP] Failed to send OTP email",
-      );
-      throw mailErr;
-    }
+    await sendOtpEmail(normalizedEmail, otp);
 
     const elapsed = Date.now() - startTime;
     logger.info(
       {
         controller: "requestSignupOtp",
         action: "completed",
-        email: normalizedEmail,
         durationMs: elapsed,
       },
       `[RequestOTP] Completed in ${elapsed}ms`,
@@ -146,79 +132,71 @@ export async function requestSignupOtp(
       success: true,
       message: "Verification OTP sent to your email (valid for 10 minutes).",
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "requestSignupOtp",
-        email: normalizedEmail,
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[RequestOTP] Error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
 export async function signup(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
-  const body = req.body as {
+  const body = (req.body ?? {}) as {
     name?: string;
     email?: string;
     password?: string;
     otp?: string;
   };
   logger.info(
-    { controller: "signup", action: "initialized", email: body.email },
+    { controller: "signup", action: "initialized" },
     "[Signup] Controller initialized",
   );
 
   const { name, email, password, otp } = body;
 
   if (!name || !email || !password || !otp) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "signup",
         action: "validation_failed",
         reason: "missing_fields",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[Signup] Missing required fields or OTP",
     );
-    res
-      .status(400)
-      .json({
-        success: false,
-        message: "Name, email, password, and OTP are required",
-      });
+    res.status(400).json({
+      success: false,
+      message: "Name, email, password, and OTP are required",
+    });
     return;
   }
 
   if (password.length < 6) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "signup",
         action: "validation_failed",
         reason: "password_too_short",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[Signup] Password too short",
     );
-    res
-      .status(400)
-      .json({
-        success: false,
-        message: "Password must be at least 6 characters",
-      });
+    res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters",
+    });
     return;
   }
 
@@ -226,20 +204,18 @@ export async function signup(req: Request, res: Response): Promise<void> {
     const normalizedEmail = email.toLowerCase().trim();
 
     const otpResult = await pool.query(
-      `SELECT id FROM otp_verifications 
+      `SELECT id FROM otp_verifications
        WHERE email = $1 AND otp = $2 AND purpose = 'signup' AND is_verified = FALSE AND expires_at > CURRENT_TIMESTAMP
        ORDER BY created_at DESC LIMIT 1`,
       [normalizedEmail, otp.trim()],
     );
 
     if (otpResult.rows.length === 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "signup",
           action: "invalid_otp",
-          email: normalizedEmail,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[Signup] Invalid or expired OTP",
       );
@@ -249,17 +225,10 @@ export async function signup(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    const otpId = otpResult.rows[0].id as number;
     await pool.query(
       "UPDATE otp_verifications SET is_verified = TRUE WHERE id = $1",
-      [otpResult.rows[0].id],
-    );
-    logger.debug(
-      {
-        controller: "signup",
-        email: normalizedEmail,
-        otpId: otpResult.rows[0].id,
-      },
-      "[Signup] OTP marked verified",
+      [otpId],
     );
 
     const existing = await pool.query(
@@ -268,22 +237,18 @@ export async function signup(req: Request, res: Response): Promise<void> {
     );
 
     if (existing.rows.length > 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "signup",
-          email: normalizedEmail,
-          reason: "user_exists",
-          durationMs: elapsed,
+          action: "user_exists",
+          durationMs: Date.now() - startTime,
         },
         "[Signup] User already exists",
       );
-      res
-        .status(409)
-        .json({
-          success: false,
-          message: "User with this email already exists",
-        });
+      res.status(409).json({
+        success: false,
+        message: "User with this email already exists",
+      });
       return;
     }
 
@@ -297,25 +262,31 @@ export async function signup(req: Request, res: Response): Promise<void> {
       [name.trim(), normalizedEmail, passwordHash],
     );
 
-    const newUser = result.rows[0];
+    const newUser = result.rows[0] as {
+      id: number;
+      name: string;
+      email: string;
+      avatar_url: string | null;
+      created_at: Date;
+    };
 
     await pool.query(
       "UPDATE users SET created_by = $1, updated_by = $1 WHERE id = $1",
       [newUser.id],
     );
 
-    sendWelcomeEmail(newUser.email, newUser.name).catch((err: any) =>
+    sendWelcomeEmail(newUser.email, newUser.name).catch((err: unknown) => {
+      const { message, stack } = getErrorInfo(err);
       logger.error(
         {
           controller: "signup",
           userId: newUser.id,
-          email: newUser.email,
-          error: err?.message,
-          stack: err?.stack,
+          error: message,
+          stack,
         },
         "[Signup] Failed to send welcome email",
-      ),
-    );
+      );
+    });
 
     const token = generateToken({ id: newUser.id, email: newUser.email });
     res.cookie(config.authCookieName, token, COOKIE_OPTIONS);
@@ -326,7 +297,6 @@ export async function signup(req: Request, res: Response): Promise<void> {
         controller: "signup",
         action: "completed",
         userId: newUser.id,
-        email: newUser.email,
         durationMs: elapsed,
       },
       `[Signup] Completed successfully in ${elapsed}ms`,
@@ -337,45 +307,42 @@ export async function signup(req: Request, res: Response): Promise<void> {
       message: "Signup verified and completed successfully",
       user: newUser,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "signup",
-        email: body.email,
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[Signup] Failed with error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
 export async function login(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
-  const body = req.body as { email?: string; password?: string };
+  const body = (req.body ?? {}) as { email?: string; password?: string };
   logger.info(
-    { controller: "login", action: "initialized", email: body.email },
+    { controller: "login", action: "initialized" },
     "[Login] Controller initialized",
   );
 
   const { email, password } = body;
 
   if (!email || !password) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "login",
         action: "validation_failed",
         reason: "missing_credentials",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[Login] Missing email or password",
     );
@@ -393,14 +360,12 @@ export async function login(req: Request, res: Response): Promise<void> {
     );
 
     if (result.rows.length === 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "login",
           action: "auth_failed",
           reason: "user_not_found",
-          email: normalizedEmail,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[Login] User not found",
       );
@@ -419,13 +384,12 @@ export async function login(req: Request, res: Response): Promise<void> {
     };
 
     if (!user.password_hash) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "login",
           action: "oauth_account_password_attempt",
           userId: user.id,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[Login] OAuth account requires Google login",
       );
@@ -439,14 +403,13 @@ export async function login(req: Request, res: Response): Promise<void> {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "login",
           action: "auth_failed",
           reason: "incorrect_password",
           userId: user.id,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[Login] Incorrect password",
       );
@@ -457,22 +420,24 @@ export async function login(req: Request, res: Response): Promise<void> {
     }
 
     sendLoginAlertEmail(user.email, user.name, "Email & Password").catch(
-      (err: any) =>
+      (err: unknown) => {
+        const { message, stack } = getErrorInfo(err);
         logger.error(
           {
             controller: "login",
             userId: user.id,
-            error: err?.message,
-            stack: err?.stack,
+            error: message,
+            stack,
           },
           "[Login] Failed to send login alert email",
-        ),
+        );
+      },
     );
 
     const token = generateToken({ id: user.id, email: user.email });
     res.cookie(config.authCookieName, token, COOKIE_OPTIONS);
 
-    const { password_hash: _password_hash, ...safeUser } = user;
+    const { password_hash: _passwordHash, ...safeUser } = user;
     const elapsed = Date.now() - startTime;
     logger.info(
       {
@@ -489,24 +454,22 @@ export async function login(req: Request, res: Response): Promise<void> {
       message: "Logged in successfully",
       user: safeUser,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "login",
-        email: body.email,
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[Login] Failed with error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
@@ -537,13 +500,14 @@ export async function logout(req: Request, res: Response): Promise<void> {
       `[Logout] Completed in ${elapsed}ms`,
     );
     res.json({ success: true, message: "Logged out successfully" });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "logout",
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[Logout] Failed with error in ${elapsed}ms`,
@@ -561,9 +525,12 @@ export async function getMe(req: AuthRequest, res: Response): Promise<void> {
   );
 
   if (!userId) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
-      { controller: "getMe", action: "unauthenticated", durationMs: elapsed },
+      {
+        controller: "getMe",
+        action: "unauthenticated",
+        durationMs: Date.now() - startTime,
+      },
       "[GetMe] Missing authenticated user",
     );
     res.status(401).json({ success: false, message: "Unauthorized" });
@@ -577,13 +544,12 @@ export async function getMe(req: AuthRequest, res: Response): Promise<void> {
     );
 
     if (result.rows.length === 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "getMe",
           action: "user_not_found",
           userId,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[GetMe] User not found",
       );
@@ -597,24 +563,23 @@ export async function getMe(req: AuthRequest, res: Response): Promise<void> {
       `[GetMe] Completed in ${elapsed}ms`,
     );
     res.json({ success: true, user: result.rows[0] });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "getMe",
         userId,
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[GetMe] Failed with error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
@@ -623,21 +588,19 @@ export async function forgotPassword(
   res: Response,
 ): Promise<void> {
   const startTime = Date.now();
-  const body = req.body as { email?: string };
+  const { email } = (req.body ?? {}) as { email?: string };
   logger.info(
-    { controller: "forgotPassword", action: "initialized", email: body.email },
+    { controller: "forgotPassword", action: "initialized" },
     "[ForgotPassword] Controller initialized",
   );
 
-  const { email } = body;
   if (!email) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "forgotPassword",
         action: "validation_failed",
         reason: "missing_email",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[ForgotPassword] Missing email",
     );
@@ -653,13 +616,11 @@ export async function forgotPassword(
     );
 
     if (result.rows.length === 0) {
-      const elapsed = Date.now() - startTime;
       logger.info(
         {
           controller: "forgotPassword",
           action: "user_not_found_silent_return",
-          email: normalizedEmail,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[ForgotPassword] User does not exist, silent return",
       );
@@ -679,31 +640,13 @@ export async function forgotPassword(
       [resetToken, expiry, normalizedEmail],
     );
 
-    try {
-      await sendPasswordResetEmail(normalizedEmail, resetToken);
-      logger.debug(
-        { controller: "forgotPassword", email: normalizedEmail },
-        "[ForgotPassword] Reset email dispatched",
-      );
-    } catch (mailErr: any) {
-      logger.error(
-        {
-          controller: "forgotPassword",
-          email: normalizedEmail,
-          error: mailErr?.message,
-          stack: mailErr?.stack,
-        },
-        "[ForgotPassword] Failed to send reset email",
-      );
-      throw mailErr;
-    }
+    await sendPasswordResetEmail(normalizedEmail, resetToken);
 
     const elapsed = Date.now() - startTime;
     logger.info(
       {
         controller: "forgotPassword",
         action: "completed",
-        email: normalizedEmail,
         durationMs: elapsed,
       },
       `[ForgotPassword] Reset link dispatched in ${elapsed}ms`,
@@ -714,24 +657,22 @@ export async function forgotPassword(
       message:
         "Password reset link sent to your email (or check terminal if credentials not yet configured).",
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "forgotPassword",
-        email: body.email,
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[ForgotPassword] Failed with error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
@@ -740,22 +681,22 @@ export async function resetPassword(
   res: Response,
 ): Promise<void> {
   const startTime = Date.now();
-  const body = req.body as { token?: string; newPassword?: string };
+  const { token, newPassword } = (req.body ?? {}) as {
+    token?: string;
+    newPassword?: string;
+  };
   logger.info(
     { controller: "resetPassword", action: "initialized" },
     "[ResetPassword] Controller initialized",
   );
 
-  const { token, newPassword } = body;
-
   if (!token || !newPassword) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "resetPassword",
         action: "validation_failed",
         reason: "missing_fields",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[ResetPassword] Missing token or password",
     );
@@ -766,22 +707,19 @@ export async function resetPassword(
   }
 
   if (newPassword.length < 6) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
       {
         controller: "resetPassword",
         action: "validation_failed",
         reason: "password_too_short",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[ResetPassword] Password too short",
     );
-    res
-      .status(400)
-      .json({
-        success: false,
-        message: "Password must be at least 6 characters",
-      });
+    res.status(400).json({
+      success: false,
+      message: "Password must be at least 6 characters",
+    });
     return;
   }
 
@@ -792,12 +730,11 @@ export async function resetPassword(
     );
 
     if (result.rows.length === 0) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "resetPassword",
           action: "invalid_or_expired_token",
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[ResetPassword] Invalid or expired token",
       );
@@ -812,8 +749,8 @@ export async function resetPassword(
     const passwordHash = await bcrypt.hash(newPassword, salt);
 
     await pool.query(
-      `UPDATE users 
-       SET password_hash = $1, reset_token = NULL, reset_token_expiry = NULL, updated_by = $2, updated_at = CURRENT_TIMESTAMP 
+      `UPDATE users
+       SET password_hash = $1, reset_token = NULL, reset_token_expiry = NULL, updated_by = $2, updated_at = CURRENT_TIMESTAMP
        WHERE id = $2`,
       [passwordHash, user.id],
     );
@@ -833,23 +770,22 @@ export async function resetPassword(
       success: true,
       message: "Password has been reset successfully. Please log in.",
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "resetPassword",
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[ResetPassword] Failed with error in ${elapsed}ms`,
     );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: error?.message || "Internal server error",
-      });
+    res.status(500).json({
+      success: false,
+      message: message || "Internal server error",
+    });
   }
 }
 
@@ -864,12 +800,11 @@ export async function getGoogleAuthUrl(
   );
 
   if (!config.google.clientId) {
-    const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "getGoogleAuthUrl",
         error: "Missing GOOGLE_CLIENT_ID",
-        durationMs: elapsed,
+        durationMs: Date.now() - startTime,
       },
       "[GoogleAuthUrl] Google Client ID not configured",
     );
@@ -882,7 +817,7 @@ export async function getGoogleAuthUrl(
 
   try {
     const rootUrl = "https://accounts.google.com/o/oauth2/v2/auth";
-    const options = {
+    const params = new URLSearchParams({
       redirect_uri: config.google.redirectUri,
       client_id: config.google.clientId,
       access_type: "offline",
@@ -892,9 +827,8 @@ export async function getGoogleAuthUrl(
         "https://www.googleapis.com/auth/userinfo.profile",
         "https://www.googleapis.com/auth/userinfo.email",
       ].join(" "),
-    };
+    });
 
-    const qs = new URLSearchParams(options);
     const elapsed = Date.now() - startTime;
     logger.info(
       {
@@ -904,14 +838,15 @@ export async function getGoogleAuthUrl(
       },
       `[GoogleAuthUrl] Completed in ${elapsed}ms`,
     );
-    res.json({ success: true, url: `${rootUrl}?${qs.toString()}` });
-  } catch (error: any) {
+    res.json({ success: true, url: `${rootUrl}?${params.toString()}` });
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "getGoogleAuthUrl",
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[GoogleAuthUrl] Failed with error in ${elapsed}ms`,
@@ -932,12 +867,15 @@ export async function googleCallback(
     "[GoogleCallback] Controller initialized",
   );
 
-  const code = req.query.code as string | undefined;
+  const code = typeof req.query.code === "string" ? req.query.code : undefined;
 
   if (!code) {
-    const elapsed = Date.now() - startTime;
     logger.warn(
-      { controller: "googleCallback", action: "no_code", durationMs: elapsed },
+      {
+        controller: "googleCallback",
+        action: "no_code",
+        durationMs: Date.now() - startTime,
+      },
       "[GoogleCallback] Missing authorization code",
     );
     res.redirect(
@@ -966,22 +904,12 @@ export async function googleCallback(
     };
 
     if (!tokenData.access_token) {
-      logger.error(
-        {
-          controller: "googleCallback",
-          action: "token_exchange_failed",
-          error: tokenData.error_description || tokenData.error,
-        },
-        "[GoogleCallback] Failed to exchange authorization code for tokens",
-      );
       throw new Error(
-        tokenData.error_description || "Failed to exchange Google OAuth code",
+        tokenData.error_description ||
+          tokenData.error ||
+          "Failed to exchange Google OAuth code",
       );
     }
-    logger.debug(
-      { controller: "googleCallback" },
-      "[GoogleCallback] Access token acquired",
-    );
 
     const userResponse = await fetch(
       "https://www.googleapis.com/oauth2/v2/userinfo",
@@ -991,14 +919,6 @@ export async function googleCallback(
     );
 
     if (!userResponse.ok) {
-      logger.error(
-        {
-          controller: "googleCallback",
-          status: userResponse.status,
-          statusText: userResponse.statusText,
-        },
-        "[GoogleCallback] Failed to fetch Google user profile",
-      );
       throw new Error("Failed to fetch Google user profile");
     }
 
@@ -1012,13 +932,11 @@ export async function googleCallback(
     const { id: googleId, email, name, picture } = googleUser;
 
     if (!email) {
-      const elapsed = Date.now() - startTime;
       logger.warn(
         {
           controller: "googleCallback",
           action: "no_email_in_profile",
-          googleId,
-          durationMs: elapsed,
+          durationMs: Date.now() - startTime,
         },
         "[GoogleCallback] Google profile missing email",
       );
@@ -1028,14 +946,10 @@ export async function googleCallback(
       return;
     }
 
-    logger.info(
-      { controller: "googleCallback", googleId, email },
-      "[GoogleCallback] Google profile retrieved",
-    );
-
+    const normalizedEmail = email.toLowerCase().trim();
     const userResult = await pool.query(
       "SELECT id, name, email, avatar_url FROM users WHERE (google_id = $1 OR email = $2) AND is_deleted = FALSE",
-      [googleId, email.toLowerCase()],
+      [googleId ?? null, normalizedEmail],
     );
 
     let user: {
@@ -1052,54 +966,64 @@ export async function googleCallback(
         `INSERT INTO users (name, email, google_id, avatar_url, created_at, updated_at)
          VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          RETURNING id, name, email, avatar_url`,
-        [name || "Google User", email.toLowerCase(), googleId, picture],
+        [
+          name || "Google User",
+          normalizedEmail,
+          googleId ?? null,
+          picture ?? null,
+        ],
       );
-      user = insertResult.rows[0];
+      user = insertResult.rows[0] as {
+        id: number;
+        name: string;
+        email: string;
+        avatar_url: string | null;
+      };
 
       await pool.query(
         "UPDATE users SET created_by = $1, updated_by = $1 WHERE id = $1",
         [user.id],
       );
 
-      sendWelcomeEmail(user.email, user.name).catch((err: any) =>
+      sendWelcomeEmail(user.email, user.name).catch((err: unknown) => {
+        const { message, stack } = getErrorInfo(err);
         logger.error(
           {
             controller: "googleCallback",
             userId: user.id,
-            error: err?.message,
-            stack: err?.stack,
+            error: message,
+            stack,
           },
           "[GoogleOAuth] Failed to send welcome email",
-        ),
-      );
-      logger.info(
-        { controller: "googleCallback", userId: user.id, email: user.email },
-        "[GoogleCallback] New user created via Google OAuth",
-      );
+        );
+      });
     } else {
-      user = userResult.rows[0];
+      user = userResult.rows[0] as {
+        id: number;
+        name: string;
+        email: string;
+        avatar_url: string | null;
+      };
       await pool.query(
         `UPDATE users SET google_id = COALESCE(google_id, $1), avatar_url = COALESCE(avatar_url, $2), updated_by = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-        [googleId, picture, user.id],
-      );
-      logger.info(
-        { controller: "googleCallback", userId: user.id },
-        "[GoogleCallback] Existing user logged in via Google OAuth",
+        [googleId ?? null, picture ?? null, user.id],
       );
     }
 
     if (!isNewUser) {
       sendLoginAlertEmail(user.email, user.name, "Google OAuth").catch(
-        (err: any) =>
+        (err: unknown) => {
+          const { message, stack } = getErrorInfo(err);
           logger.error(
             {
               controller: "googleCallback",
               userId: user.id,
-              error: err?.message,
-              stack: err?.stack,
+              error: message,
+              stack,
             },
             "[GoogleOAuth] Failed to send login alert email",
-          ),
+          );
+        },
       );
     }
 
@@ -1119,19 +1043,20 @@ export async function googleCallback(
     );
 
     res.redirect(`${config.clientUrl}/`);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const { message, stack } = getErrorInfo(error);
     const elapsed = Date.now() - startTime;
     logger.error(
       {
         controller: "googleCallback",
-        error: error?.message,
-        stack: error?.stack,
+        error: message,
+        stack,
         durationMs: elapsed,
       },
       `[GoogleCallback] Failed with error in ${elapsed}ms`,
     );
     res.redirect(
-      `${config.clientUrl}/login?error=${encodeURIComponent(error?.message || "Google Auth Error")}`,
+      `${config.clientUrl}/login?error=${encodeURIComponent(message || "Google Auth Error")}`,
     );
   }
 }
