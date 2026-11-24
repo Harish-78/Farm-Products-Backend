@@ -117,7 +117,11 @@ app.use(notFoundHandler);
 // 11. Centralized Global Error Handler
 app.use(errorHandler);
 
-// Server startup
+// Export the Express app for serverless runtimes (e.g. Vercel api/ functions)
+export { app };
+
+// Server startup — only when run directly (npm run dev / npm start).
+// On Vercel the api/ functions import and invoke `app` directly.
 async function start() {
   await initDb();
   initFeedCronJob();
@@ -125,6 +129,13 @@ async function start() {
     logger.info(`Backend server running at http://localhost:${config.port}`);
     logger.info(`Client URL: ${config.clientUrl}`);
     logger.info(`Pino HTTP logging & security middlewares enabled`);
+  });
+}
+
+if (process.env.VERCEL !== '1') {
+  start().catch((err) => {
+    logger.error({ err }, 'Failed to start server');
+    process.exit(1);
   });
 }
 
@@ -137,5 +148,3 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   logger.error({ reason }, 'Unhandled Rejection detected!');
 });
-
-start();
