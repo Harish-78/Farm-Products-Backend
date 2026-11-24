@@ -1,13 +1,13 @@
-import { Response } from 'express';
-import { pool } from '../db/index.js';
-import { logger } from '../config/logger.js';
-import { AuthRequest } from '../middleware/auth.js';
-import { checkFeedStockAndAlert } from '../services/feedCron.js';
+import { Response } from "express";
+import { pool } from "../db/index.js";
+import { logger } from "../config/logger.js";
+import { AuthRequest } from "../middleware/auth.js";
+import { checkFeedStockAndAlert } from "../services/feedCron.js";
 
-// ==========================================
-// 1. LIVESTOCK (Quails & Multi-Animal Flocks)
-// ==========================================
-export async function getLivestock(req: AuthRequest, res: Response): Promise<void> {
+export async function getLivestock(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   try {
     const result = await pool.query(`
       SELECT 
@@ -17,34 +17,100 @@ export async function getLivestock(req: AuthRequest, res: Response): Promise<voi
       WHERE l.is_deleted = FALSE
       ORDER BY l.created_at DESC;
     `);
+    logger.info(
+      { userId: req.user?.id, count: result.rows.length },
+      "[Livestock] Fetched livestock batches",
+    );
     res.json({ success: true, livestock: result.rows });
   } catch (err: any) {
-    logger.error({ err: err.message }, '[Livestock] Error fetching livestock');
-    res.status(500).json({ success: false, message: 'Failed to fetch livestock data' });
+    logger.error(
+      { err: err.message, stack: err.stack, userId: req.user?.id },
+      "[Livestock] Error fetching livestock",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to fetch livestock data" });
   }
 }
 
-export async function createLivestock(req: AuthRequest, res: Response): Promise<void> {
-  const { animal_type, batch_name, current_count, mortality_count, avg_daily_feed_per_bird_grams, notes } = req.body;
+export async function createLivestock(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
+  const {
+    animal_type,
+    batch_name,
+    current_count,
+    mortality_count,
+    avg_daily_feed_per_bird_grams,
+    notes,
+  } = req.body;
   const userId = req.user?.id;
+
+  if (!batch_name) {
+    logger.warn(
+      { userId, body: req.body },
+      "[Livestock] Create failed: batch_name missing",
+    );
+    res.status(400).json({ success: false, message: "Batch name is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
       `INSERT INTO livestock (animal_type, batch_name, current_count, mortality_count, avg_daily_feed_per_bird_grams, notes, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
        RETURNING *`,
-      [animal_type || 'Quail', batch_name, current_count || 0, mortality_count || 0, avg_daily_feed_per_bird_grams || 25, notes || '', userId]
+      [
+        animal_type || "Quail",
+        batch_name,
+        current_count || 0,
+        mortality_count || 0,
+        avg_daily_feed_per_bird_grams || 25,
+        notes || "",
+        userId,
+      ],
     );
-    res.status(201).json({ success: true, message: 'Livestock batch registered successfully', batch: result.rows[0] });
+    logger.info(
+      { userId, batchId: result.rows[0].id, batchName: batch_name },
+      "[Livestock] Batch registered successfully",
+    );
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Livestock batch registered successfully",
+        batch: result.rows[0],
+      });
   } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId, body: req.body },
+      "[Livestock] Error creating batch",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function updateLivestock(req: AuthRequest, res: Response): Promise<void> {
+export async function updateLivestock(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
-  const { current_count, mortality_count, avg_daily_feed_per_bird_grams, notes } = req.body;
+  const {
+    current_count,
+    mortality_count,
+    avg_daily_feed_per_bird_grams,
+    notes,
+  } = req.body;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Livestock] Update failed: id missing");
+    res
+      .status(400)
+      .json({ success: false, message: "Livestock ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -57,20 +123,56 @@ export async function updateLivestock(req: AuthRequest, res: Response): Promise<
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $6 AND is_deleted = FALSE
        RETURNING *`,
-      [current_count, mortality_count, avg_daily_feed_per_bird_grams, notes, userId, id]
+      [
+        current_count,
+        mortality_count,
+        avg_daily_feed_per_bird_grams,
+        notes,
+        userId,
+        id,
+      ],
     );
-    res.json({ success: true, message: 'Livestock updated', batch: result.rows[0] });
+
+    if (result.rows.length === 0) {
+      logger.warn(
+        { userId, batchId: id },
+        "[Livestock] Update failed: batch not found or deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Livestock batch not found or already deleted",
+        });
+      return;
+    }
+
+    logger.info(
+      { userId, batchId: id },
+      "[Livestock] Batch updated successfully",
+    );
+    res.json({
+      success: true,
+      message: "Livestock updated",
+      batch: result.rows[0],
+    });
   } catch (err: any) {
+    logger.error(
+      {
+        err: err.message,
+        stack: err.stack,
+        userId,
+        batchId: id,
+        body: req.body,
+      },
+      "[Livestock] Error updating batch",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-// ==========================================
-// 2. FEEDS INVENTORY & PREDICTION
-// ==========================================
 export async function getFeeds(req: AuthRequest, res: Response): Promise<void> {
   try {
-    // 1. Calculate daily consumption per animal type
     const livestockResult = await pool.query(`
       SELECT 
         animal_type,
@@ -81,19 +183,18 @@ export async function getFeeds(req: AuthRequest, res: Response): Promise<void> {
       GROUP BY animal_type;
     `);
 
-    // 2. Fetch feeds
     const feedsResult = await pool.query(`
       SELECT * FROM feed_inventory WHERE is_deleted = FALSE ORDER BY created_at DESC;
     `);
 
-    // 3. Compute days remaining and alert status
     const feedsWithPrediction = feedsResult.rows.map((feed) => {
       const match = livestockResult.rows.find(
-        (a) => a.animal_type.toLowerCase() === feed.target_animal.toLowerCase()
+        (a) => a.animal_type.toLowerCase() === feed.target_animal.toLowerCase(),
       );
       const dailyNeededKg = match ? Number(match.daily_feed_needed_kg) : 0;
       const currentStockKg = Number(feed.current_stock_kg);
-      const daysRemaining = dailyNeededKg > 0 ? Math.floor(currentStockKg / dailyNeededKg) : 999;
+      const daysRemaining =
+        dailyNeededKg > 0 ? Math.floor(currentStockKg / dailyNeededKg) : 999;
       const isLowStock = daysRemaining <= Number(feed.reorder_alert_days || 10);
 
       return {
@@ -104,33 +205,102 @@ export async function getFeeds(req: AuthRequest, res: Response): Promise<void> {
       };
     });
 
+    const lowStockCount = feedsWithPrediction.filter(
+      (f) => f.is_low_stock,
+    ).length;
+    logger.info(
+      {
+        userId: req.user?.id,
+        feedCount: feedsWithPrediction.length,
+        lowStockCount,
+      },
+      "[Feeds] Fetched feeds with prediction",
+    );
     res.json({ success: true, feeds: feedsWithPrediction });
   } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId: req.user?.id },
+      "[Feeds] Error fetching feeds",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function createFeed(req: AuthRequest, res: Response): Promise<void> {
-  const { feed_name, target_animal, bag_weight_kg, current_stock_kg, cost_per_kg, reorder_alert_days, supplier_name, notes } = req.body;
+export async function createFeed(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
+  const {
+    feed_name,
+    target_animal,
+    bag_weight_kg,
+    current_stock_kg,
+    cost_per_kg,
+    reorder_alert_days,
+    supplier_name,
+    notes,
+  } = req.body;
   const userId = req.user?.id;
+
+  if (!feed_name) {
+    logger.warn(
+      { userId, body: req.body },
+      "[Feeds] Create failed: feed_name missing",
+    );
+    res.status(400).json({ success: false, message: "Feed name is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
       `INSERT INTO feed_inventory (feed_name, target_animal, bag_weight_kg, current_stock_kg, cost_per_kg, reorder_alert_days, supplier_name, notes, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
        RETURNING *`,
-      [feed_name, target_animal || 'Quail', bag_weight_kg || 50, current_stock_kg || 0, cost_per_kg || 35, reorder_alert_days || 10, supplier_name, notes, userId]
+      [
+        feed_name,
+        target_animal || "Quail",
+        bag_weight_kg || 50,
+        current_stock_kg || 0,
+        cost_per_kg || 35,
+        reorder_alert_days || 10,
+        supplier_name,
+        notes,
+        userId,
+      ],
     );
-    res.status(201).json({ success: true, message: 'Feed stock registered', feed: result.rows[0] });
+    logger.info(
+      { userId, feedId: result.rows[0].id, feedName: feed_name },
+      "[Feeds] Feed stock registered",
+    );
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Feed stock registered",
+        feed: result.rows[0],
+      });
   } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId, body: req.body },
+      "[Feeds] Error creating feed",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function updateFeedStock(req: AuthRequest, res: Response): Promise<void> {
+export async function updateFeedStock(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
   const { current_stock_kg, cost_per_kg } = req.body;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Feeds] Update failed: id missing");
+    res.status(400).json({ success: false, message: "Feed ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -141,36 +311,92 @@ export async function updateFeedStock(req: AuthRequest, res: Response): Promise<
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4 AND is_deleted = FALSE
        RETURNING *`,
-      [current_stock_kg, cost_per_kg, userId, id]
+      [current_stock_kg, cost_per_kg, userId, id],
     );
-    res.json({ success: true, message: 'Feed stock updated', feed: result.rows[0] });
+
+    if (result.rows.length === 0) {
+      logger.warn(
+        { userId, feedId: id },
+        "[Feeds] Update failed: feed not found or deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Feed item not found or already deleted",
+        });
+      return;
+    }
+
+    logger.info(
+      { userId, feedId: id, newStock: current_stock_kg, newCost: cost_per_kg },
+      "[Feeds] Feed stock updated",
+    );
+    res.json({
+      success: true,
+      message: "Feed stock updated",
+      feed: result.rows[0],
+    });
   } catch (err: any) {
+    logger.error(
+      {
+        err: err.message,
+        stack: err.stack,
+        userId,
+        feedId: id,
+        body: req.body,
+      },
+      "[Feeds] Error updating feed stock",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-// Trigger manual check and email alert for feed stock
-export async function triggerFeedCheckNow(_req: AuthRequest, res: Response): Promise<void> {
-  await checkFeedStockAndAlert();
-  res.json({ success: true, message: 'Feed depletion check completed & notifications sent.' });
+export async function triggerFeedCheckNow(
+  _req: AuthRequest,
+  res: Response,
+): Promise<void> {
+  try {
+    logger.info(
+      { userId: _req.user?.id },
+      "[Feeds] Manual feed depletion check triggered",
+    );
+    await checkFeedStockAndAlert();
+    logger.info(
+      { userId: _req.user?.id },
+      "[Feeds] Manual feed depletion check completed successfully",
+    );
+    res.json({
+      success: true,
+      message: "Feed depletion check completed & notifications sent.",
+    });
+  } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId: _req.user?.id },
+      "[Feeds] Error during manual feed depletion check",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Feed depletion check failed" });
+  }
 }
 
-// ==========================================
-// 3. DYNAMIC EXPENSES MODULE
-// ==========================================
-export async function getExpenses(req: AuthRequest, res: Response): Promise<void> {
+export async function getExpenses(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { category, business_unit, startDate, endDate } = req.query;
 
   try {
     let query = `SELECT * FROM expenses WHERE is_deleted = FALSE`;
     const params: any[] = [];
 
-    if (category && category !== 'ALL') {
+    if (category && category !== "ALL") {
       params.push(category);
       query += ` AND category = $${params.length}`;
     }
 
-    if (business_unit && business_unit !== 'ALL') {
+    if (business_unit && business_unit !== "ALL") {
       params.push(business_unit);
       query += ` AND business_unit = $${params.length}`;
     }
@@ -188,18 +414,55 @@ export async function getExpenses(req: AuthRequest, res: Response): Promise<void
     query += ` ORDER BY expense_date DESC, created_at DESC`;
 
     const result = await pool.query(query, params);
+    logger.info(
+      {
+        userId: req.user?.id,
+        filters: { category, business_unit, startDate, endDate },
+        count: result.rows.length,
+      },
+      "[Expenses] Fetched expenses",
+    );
     res.json({ success: true, expenses: result.rows });
   } catch (err: any) {
+    logger.error(
+      {
+        err: err.message,
+        stack: err.stack,
+        userId: req.user?.id,
+        filters: { category, business_unit, startDate, endDate },
+      },
+      "[Expenses] Error fetching expenses",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function createExpense(req: AuthRequest, res: Response): Promise<void> {
-  const { category, title, amount, expense_date, payment_method, business_unit, notes } = req.body;
+export async function createExpense(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
+  const {
+    category,
+    title,
+    amount,
+    expense_date,
+    payment_method,
+    business_unit,
+    notes,
+  } = req.body;
   const userId = req.user?.id;
 
   if (!category || !title || !amount) {
-    res.status(400).json({ success: false, message: 'Category, title, and amount are required' });
+    logger.warn(
+      { userId, body: req.body },
+      "[Expenses] Create failed: missing required fields",
+    );
+    res
+      .status(400)
+      .json({
+        success: false,
+        message: "Category, title, and amount are required",
+      });
     return;
   }
 
@@ -208,35 +471,108 @@ export async function createExpense(req: AuthRequest, res: Response): Promise<vo
       `INSERT INTO expenses (category, title, amount, expense_date, payment_method, business_unit, notes, created_by, updated_by)
        VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7, $8, $8)
        RETURNING *`,
-      [category, title, amount, expense_date, payment_method || 'CASH', business_unit || 'Quail Farm', notes || '', userId]
+      [
+        category,
+        title,
+        amount,
+        expense_date,
+        payment_method || "CASH",
+        business_unit || "Quail Farm",
+        notes || "",
+        userId,
+      ],
     );
-    res.status(201).json({ success: true, message: 'Expense logged successfully', expense: result.rows[0] });
+    logger.info(
+      { userId, expenseId: result.rows[0].id, category, amount },
+      "[Expenses] Expense logged successfully",
+    );
+    res
+      .status(201)
+      .json({
+        success: true,
+        message: "Expense logged successfully",
+        expense: result.rows[0],
+      });
   } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId, body: req.body },
+      "[Expenses] Error creating expense",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function deleteExpense(req: AuthRequest, res: Response): Promise<void> {
+export async function deleteExpense(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Expenses] Delete failed: id missing");
+    res.status(400).json({ success: false, message: "Expense ID is required" });
+    return;
+  }
 
   try {
-    await pool.query(
+    const result = await pool.query(
       `UPDATE expenses 
        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1 
-       WHERE id = $2`,
-      [userId, id]
+       WHERE id = $2 AND is_deleted = FALSE
+       RETURNING id`,
+      [userId, id],
     );
-    res.json({ success: true, message: 'Expense deleted successfully' });
+
+    if (result.rows.length === 0) {
+      logger.warn(
+        { userId, expenseId: id },
+        "[Expenses] Delete failed: expense not found or already deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Expense not found or already deleted",
+        });
+      return;
+    }
+
+    logger.info(
+      { userId, expenseId: id },
+      "[Expenses] Expense deleted successfully",
+    );
+    res.json({ success: true, message: "Expense deleted successfully" });
   } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId, expenseId: id },
+      "[Expenses] Error deleting expense",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-export async function updateExpense(req: AuthRequest, res: Response): Promise<void> {
+export async function updateExpense(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
-  const { category, title, amount, expense_date, payment_method, business_unit, notes } = req.body;
+  const {
+    category,
+    title,
+    amount,
+    expense_date,
+    payment_method,
+    business_unit,
+    notes,
+  } = req.body;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Expenses] Update failed: id missing");
+    res.status(400).json({ success: false, message: "Expense ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -252,27 +588,71 @@ export async function updateExpense(req: AuthRequest, res: Response): Promise<vo
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $9 AND is_deleted = FALSE
        RETURNING *`,
-      [category, title, amount, expense_date, payment_method, business_unit, notes, userId, id]
+      [
+        category,
+        title,
+        amount,
+        expense_date,
+        payment_method,
+        business_unit,
+        notes,
+        userId,
+        id,
+      ],
     );
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Expense not found or already deleted' });
+      logger.warn(
+        { userId, expenseId: id },
+        "[Expenses] Update failed: expense not found or already deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Expense not found or already deleted",
+        });
       return;
     }
 
-    res.json({ success: true, message: 'Expense updated successfully', expense: result.rows[0] });
+    logger.info(
+      { userId, expenseId: id },
+      "[Expenses] Expense updated successfully",
+    );
+    res.json({
+      success: true,
+      message: "Expense updated successfully",
+      expense: result.rows[0],
+    });
   } catch (err: any) {
+    logger.error(
+      {
+        err: err.message,
+        stack: err.stack,
+        userId,
+        expenseId: id,
+        body: req.body,
+      },
+      "[Expenses] Error updating expense",
+    );
     res.status(500).json({ success: false, message: err.message });
   }
 }
 
-// ==========================================
-// 5. SOFT DELETE OPERATIONS (Farm Module)
-// ==========================================
-
-export async function deleteLivestock(req: AuthRequest, res: Response): Promise<void> {
+export async function deleteLivestock(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Livestock] Delete failed: id missing");
+    res
+      .status(400)
+      .json({ success: false, message: "Livestock ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -280,24 +660,54 @@ export async function deleteLivestock(req: AuthRequest, res: Response): Promise<
        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1
        WHERE id = $2 AND is_deleted = FALSE
        RETURNING id`,
-      [userId, id]
+      [userId, id],
     );
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Livestock batch not found or already deleted' });
+      logger.warn(
+        { userId, batchId: id },
+        "[Livestock] Delete failed: batch not found or already deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Livestock batch not found or already deleted",
+        });
       return;
     }
 
-    res.json({ success: true, message: 'Livestock batch deleted successfully (soft delete)' });
+    logger.info(
+      { userId, batchId: id },
+      "[Livestock] Batch soft-deleted successfully",
+    );
+    res.json({
+      success: true,
+      message: "Livestock batch deleted successfully (soft delete)",
+    });
   } catch (err: any) {
-    logger.error({ err: err.message }, '[Livestock] Error soft-deleting batch');
-    res.status(500).json({ success: false, message: 'Failed to delete livestock batch' });
+    logger.error(
+      { err: err.message, stack: err.stack, userId, batchId: id },
+      "[Livestock] Error soft-deleting batch",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to delete livestock batch" });
   }
 }
 
-export async function deleteFeed(req: AuthRequest, res: Response): Promise<void> {
+export async function deleteFeed(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const { id } = req.params;
   const userId = req.user?.id;
+
+  if (!id) {
+    logger.warn({ userId }, "[Feeds] Delete failed: id missing");
+    res.status(400).json({ success: false, message: "Feed ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -305,27 +715,47 @@ export async function deleteFeed(req: AuthRequest, res: Response): Promise<void>
        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1
        WHERE id = $2 AND is_deleted = FALSE
        RETURNING id`,
-      [userId, id]
+      [userId, id],
     );
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Feed item not found or already deleted' });
+      logger.warn(
+        { userId, feedId: id },
+        "[Feeds] Delete failed: feed not found or already deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Feed item not found or already deleted",
+        });
       return;
     }
 
-    res.json({ success: true, message: 'Feed item deleted successfully (soft delete)' });
+    logger.info(
+      { userId, feedId: id },
+      "[Feeds] Feed item soft-deleted successfully",
+    );
+    res.json({
+      success: true,
+      message: "Feed item deleted successfully (soft delete)",
+    });
   } catch (err: any) {
-    logger.error({ err: err.message }, '[Feed] Error soft-deleting feed item');
-    res.status(500).json({ success: false, message: 'Failed to delete feed item' });
+    logger.error(
+      { err: err.message, stack: err.stack, userId, feedId: id },
+      "[Feeds] Error soft-deleting feed item",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to delete feed item" });
   }
 }
 
-// ==========================================
-// 4. FINANCIAL P&L & NET PROFIT DASHBOARD
-// ==========================================
-export async function getComprehensivePnL(req: AuthRequest, res: Response): Promise<void> {
+export async function getComprehensivePnL(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   try {
-    // 1. Total Lifetime & Today Sales / Revenues
     const salesAgg = await pool.query(`
       SELECT 
         COALESCE(SUM(total_amount), 0) AS total_revenue,
@@ -337,7 +767,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       WHERE is_deleted = FALSE;
     `);
 
-    // 2. Total Lifetime & Today Expenses
     const expensesAgg = await pool.query(`
       SELECT 
         COALESCE(SUM(amount), 0) AS total_expenses,
@@ -348,7 +777,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       WHERE is_deleted = FALSE;
     `);
 
-    // 3. Quails & Livestock Population
     const livestockAgg = await pool.query(`
       SELECT 
         COALESCE(SUM(current_count), 0) AS total_active_quails,
@@ -358,7 +786,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       WHERE is_deleted = FALSE;
     `);
 
-    // 4. Feeds in Hand
     const feedsAgg = await pool.query(`
       SELECT 
         COALESCE(SUM(current_stock_kg), 0) AS total_feed_stock_kg,
@@ -367,7 +794,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       WHERE is_deleted = FALSE;
     `);
 
-    // 5. Daily Net Profit Trend (Revenue - Expenses) for last 14 days
     const dailyProfitTrend = await pool.query(`
       WITH date_range AS (
         SELECT (CURRENT_DATE - i)::date AS day
@@ -396,7 +822,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       ORDER BY dr.day ASC;
     `);
 
-    // 6. Expense breakdown by category
     const expenseBreakdown = await pool.query(`
       SELECT category, COALESCE(SUM(amount), 0) AS total_amount, COUNT(id) AS count
       FROM expenses
@@ -405,7 +830,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       ORDER BY total_amount DESC;
     `);
 
-    // 7. Monthly Revenue vs Expense comparison for the last 6 months
     const monthlyComparison = await pool.query(`
       WITH months AS (
         SELECT DATE_TRUNC('month', CURRENT_DATE - (m || ' months')::interval)::date AS m_start
@@ -434,7 +858,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       ORDER BY m.m_start ASC;
     `);
 
-    // 8. Order Payment & Status Funnel distribution
     const orderStatusDistribution = await pool.query(`
       SELECT order_status, COUNT(id) AS count, COALESCE(SUM(total_amount), 0) AS total_value
       FROM orders
@@ -442,7 +865,6 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       GROUP BY order_status;
     `);
 
-    // 9. Quail Flock batch distribution
     const flockDistribution = await pool.query(`
       SELECT batch_name, current_count, mortality_count, 
              ROUND((current_count * avg_daily_feed_per_bird_grams) / 1000.0, 2) AS daily_feed_kg
@@ -461,7 +883,22 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
 
     const dailyFeedKg = Number(livestockAgg.rows[0].daily_feed_consumption_kg);
     const feedStockKg = Number(feedsAgg.rows[0].total_feed_stock_kg);
-    const feedDaysLeft = dailyFeedKg > 0 ? Math.floor(feedStockKg / dailyFeedKg) : 999;
+    const feedDaysLeft =
+      dailyFeedKg > 0 ? Math.floor(feedStockKg / dailyFeedKg) : 999;
+
+    logger.info(
+      {
+        userId: req.user?.id,
+        totalRevenue: totalRev,
+        totalExpenses: totalExp,
+        netProfitInHand,
+        todayRevenue: todayRev,
+        todayExpenses: todayExp,
+        todayNetProfit,
+        feedDaysLeft,
+      },
+      "[ComprehensivePnL] Financial report generated successfully",
+    );
 
     res.json({
       success: true,
@@ -489,7 +926,12 @@ export async function getComprehensivePnL(req: AuthRequest, res: Response): Prom
       flockDistribution: flockDistribution.rows,
     });
   } catch (err: any) {
-    logger.error({ err: err.message }, '[ComprehensivePnL] Error generating financial report');
-    res.status(500).json({ success: false, message: 'Failed to calculate profit & loss' });
+    logger.error(
+      { err: err.message, stack: err.stack, userId: req.user?.id },
+      "[ComprehensivePnL] Error generating financial report",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to calculate profit & loss" });
   }
 }

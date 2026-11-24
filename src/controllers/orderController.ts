@@ -1,15 +1,19 @@
-import { Response } from 'express';
-import { pool } from '../db/index.js';
-import { logger } from '../config/logger.js';
-import { AuthRequest } from '../middleware/auth.js';
+import { Response } from "express";
+import { pool } from "../db/index.js";
+import { logger } from "../config/logger.js";
+import { AuthRequest } from "../middleware/auth.js";
 
-// 1. Get Dashboard Analytics & Overview Stats
-export async function getDashboardStats(req: AuthRequest, res: Response): Promise<void> {
+export async function getDashboardStats(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const startTime = Date.now();
-  logger.info({ controller: 'getDashboardStats', userId: req.user?.id }, '[DashboardStats] Fetching summary');
+  logger.info(
+    { controller: "getDashboardStats", userId: req.user?.id },
+    "[DashboardStats] Fetching summary",
+  );
 
   try {
-    // Total Revenue & Orders
     const revenueQuery = await pool.query(`
       SELECT 
         COALESCE(SUM(total_amount), 0) AS total_revenue,
@@ -21,12 +25,10 @@ export async function getDashboardStats(req: AuthRequest, res: Response): Promis
       WHERE is_deleted = FALSE;
     `);
 
-    // Total registered customers
     const customersQuery = await pool.query(`
       SELECT COUNT(id) AS total_customers FROM users WHERE is_deleted = FALSE;
     `);
 
-    // Sales by day (last 7 days)
     const salesByDay = await pool.query(`
       SELECT 
         TO_CHAR(created_at, 'Mon DD') AS date_label,
@@ -38,7 +40,6 @@ export async function getDashboardStats(req: AuthRequest, res: Response): Promis
       ORDER BY DATE(created_at) ASC;
     `);
 
-    // Category distribution
     const categoryQuery = await pool.query(`
       SELECT 
         category,
@@ -50,7 +51,6 @@ export async function getDashboardStats(req: AuthRequest, res: Response): Promis
       ORDER BY revenue DESC;
     `);
 
-    // Recent 5 orders
     const recentOrders = await pool.query(`
       SELECT id, order_number, customer_name, product_name, total_amount, payment_status, order_status, created_at
       FROM orders
@@ -60,7 +60,17 @@ export async function getDashboardStats(req: AuthRequest, res: Response): Promis
     `);
 
     const elapsed = Date.now() - startTime;
-    logger.info({ controller: 'getDashboardStats', durationMs: elapsed }, `[DashboardStats] Completed in ${elapsed}ms`);
+    logger.info(
+      {
+        controller: "getDashboardStats",
+        userId: req.user?.id,
+        totalOrders: Number(revenueQuery.rows[0].total_orders),
+        totalCustomers: Number(customersQuery.rows[0].total_customers),
+        recentOrdersCount: recentOrders.rows.length,
+        durationMs: elapsed,
+      },
+      `[DashboardStats] Completed in ${elapsed}ms`,
+    );
 
     res.json({
       success: true,
@@ -78,13 +88,29 @@ export async function getDashboardStats(req: AuthRequest, res: Response): Promis
     });
   } catch (error: any) {
     const elapsed = Date.now() - startTime;
-    logger.error({ controller: 'getDashboardStats', error: error.message, durationMs: elapsed }, '[DashboardStats] Error');
-    res.status(500).json({ success: false, message: 'Failed to fetch dashboard statistics' });
+    logger.error(
+      {
+        controller: "getDashboardStats",
+        userId: req.user?.id,
+        error: error.message,
+        stack: error.stack,
+        durationMs: elapsed,
+      },
+      "[DashboardStats] Error fetching dashboard statistics",
+    );
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Failed to fetch dashboard statistics",
+      });
   }
 }
 
-// 1.5. Create New Order
-export async function createOrder(req: AuthRequest, res: Response): Promise<void> {
+export async function createOrder(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const startTime = Date.now();
   const {
     order_number,
@@ -102,10 +128,36 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<void
   } = req.body;
   const userId = req.user?.id;
 
-  logger.info({ controller: 'createOrder', order_number, customer_name }, '[CreateOrder] Started');
+  logger.info(
+    {
+      controller: "createOrder",
+      userId,
+      order_number,
+      customer_name,
+      total_amount,
+    },
+    "[CreateOrder] Started",
+  );
 
   if (!order_number || !customer_name || !product_name || !total_amount) {
-    res.status(400).json({ success: false, message: 'Order number, customer name, product name, and total amount are required' });
+    logger.warn(
+      {
+        controller: "createOrder",
+        userId,
+        order_number,
+        customer_name,
+        product_name,
+        total_amount,
+      },
+      "[CreateOrder] Validation failed: missing required fields",
+    );
+    res
+      .status(400)
+      .json({
+        success: false,
+        message:
+          "Order number, customer name, product name, and total amount are required",
+      });
     return;
   }
 
@@ -121,40 +173,65 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<void
       [
         order_number,
         customer_name,
-        customer_email || '',
-        customer_phone || '',
+        customer_email || "",
+        customer_phone || "",
         product_name,
-        category || 'General',
+        category || "General",
         quantity || 1,
         unit_price || 0,
         total_amount,
-        payment_status || 'PENDING',
-        order_status || 'PROCESSING',
-        shipping_address || '',
+        payment_status || "PENDING",
+        order_status || "PROCESSING",
+        shipping_address || "",
         userId,
-      ]
+      ],
     );
 
     const elapsed = Date.now() - startTime;
-    logger.info({ controller: 'createOrder', id: result.rows[0].id, durationMs: elapsed }, '[CreateOrder] Completed');
+    logger.info(
+      {
+        controller: "createOrder",
+        userId,
+        orderId: result.rows[0].id,
+        orderNumber: order_number,
+        durationMs: elapsed,
+      },
+      "[CreateOrder] Completed successfully",
+    );
 
     res.status(201).json({
       success: true,
-      message: 'Order created successfully',
+      message: "Order created successfully",
       order: result.rows[0],
     });
   } catch (error: any) {
     const elapsed = Date.now() - startTime;
-    logger.error({ controller: 'createOrder', error: error.message, durationMs: elapsed }, '[CreateOrder] Error');
-    res.status(500).json({ success: false, message: 'Failed to create order' });
+    logger.error(
+      {
+        controller: "createOrder",
+        userId,
+        orderNumber: order_number,
+        customerName: customer_name,
+        error: error.message,
+        stack: error.stack,
+        durationMs: elapsed,
+      },
+      "[CreateOrder] Error creating order",
+    );
+    res.status(500).json({ success: false, message: "Failed to create order" });
   }
 }
 
-// 2. Get All Orders with optional status filters & pagination
-export async function getOrders(req: AuthRequest, res: Response): Promise<void> {
+export async function getOrders(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const startTime = Date.now();
   const { status, payment, search } = req.query;
-  logger.info({ controller: 'getOrders', status, payment, search }, '[GetOrders] Querying orders');
+  logger.info(
+    { controller: "getOrders", userId: req.user?.id, status, payment, search },
+    "[GetOrders] Querying orders",
+  );
 
   try {
     let query = `
@@ -166,12 +243,12 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<void> 
     `;
     const params: any[] = [];
 
-    if (status && status !== 'ALL') {
+    if (status && status !== "ALL") {
       params.push(status);
       query += ` AND order_status = $${params.length}`;
     }
 
-    if (payment && payment !== 'ALL') {
+    if (payment && payment !== "ALL") {
       params.push(payment);
       query += ` AND payment_status = $${params.length}`;
     }
@@ -185,24 +262,77 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<void> 
 
     const result = await pool.query(query, params);
     const elapsed = Date.now() - startTime;
-    logger.info({ controller: 'getOrders', count: result.rows.length, durationMs: elapsed }, `[GetOrders] Completed in ${elapsed}ms`);
+    logger.info(
+      {
+        controller: "getOrders",
+        userId: req.user?.id,
+        filters: { status, payment, search },
+        count: result.rows.length,
+        durationMs: elapsed,
+      },
+      `[GetOrders] Completed in ${elapsed}ms`,
+    );
 
     res.json({ success: true, orders: result.rows });
   } catch (error: any) {
     const elapsed = Date.now() - startTime;
-    logger.error({ controller: 'getOrders', error: error.message, durationMs: elapsed }, '[GetOrders] Error');
-    res.status(500).json({ success: false, message: 'Failed to fetch orders' });
+    logger.error(
+      {
+        controller: "getOrders",
+        userId: req.user?.id,
+        filters: { status, payment, search },
+        error: error.message,
+        stack: error.stack,
+        durationMs: elapsed,
+      },
+      "[GetOrders] Error fetching orders",
+    );
+    res.status(500).json({ success: false, message: "Failed to fetch orders" });
   }
 }
 
-// 3. Update Order Status (Processing, Shipped, Delivered, Cancelled)
-export async function updateOrderStatus(req: AuthRequest, res: Response): Promise<void> {
+export async function updateOrderStatus(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const startTime = Date.now();
   const { id } = req.params;
   const { order_status, payment_status } = req.body;
   const userId = req.user?.id;
 
-  logger.info({ controller: 'updateOrderStatus', id, order_status, payment_status, userId }, '[UpdateOrderStatus] Started');
+  logger.info(
+    {
+      controller: "updateOrderStatus",
+      userId,
+      orderId: id,
+      order_status,
+      payment_status,
+    },
+    "[UpdateOrderStatus] Started",
+  );
+
+  if (!id) {
+    logger.warn(
+      { controller: "updateOrderStatus", userId },
+      "[UpdateOrderStatus] Validation failed: id missing",
+    );
+    res.status(400).json({ success: false, message: "Order ID is required" });
+    return;
+  }
+
+  if (!order_status && !payment_status) {
+    logger.warn(
+      { controller: "updateOrderStatus", userId, orderId: id },
+      "[UpdateOrderStatus] Validation failed: no fields to update",
+    );
+    res
+      .status(400)
+      .json({
+        success: false,
+        message: "At least one of order_status or payment_status is required",
+      });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -213,32 +343,82 @@ export async function updateOrderStatus(req: AuthRequest, res: Response): Promis
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4 AND is_deleted = FALSE
        RETURNING *`,
-      [order_status, payment_status, userId, id]
+      [order_status, payment_status, userId, id],
     );
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Order not found' });
+      const elapsed = Date.now() - startTime;
+      logger.warn(
+        {
+          controller: "updateOrderStatus",
+          userId,
+          orderId: id,
+          durationMs: elapsed,
+        },
+        "[UpdateOrderStatus] Order not found or already deleted",
+      );
+      res.status(404).json({ success: false, message: "Order not found" });
       return;
     }
 
     const elapsed = Date.now() - startTime;
-    logger.info({ controller: 'updateOrderStatus', id, durationMs: elapsed }, `[UpdateOrderStatus] Completed in ${elapsed}ms`);
+    logger.info(
+      {
+        controller: "updateOrderStatus",
+        userId,
+        orderId: id,
+        newOrderStatus: order_status,
+        newPaymentStatus: payment_status,
+        durationMs: elapsed,
+      },
+      `[UpdateOrderStatus] Completed in ${elapsed}ms`,
+    );
 
-    res.json({ success: true, message: 'Order updated successfully', order: result.rows[0] });
+    res.json({
+      success: true,
+      message: "Order updated successfully",
+      order: result.rows[0],
+    });
   } catch (error: any) {
     const elapsed = Date.now() - startTime;
-    logger.error({ controller: 'updateOrderStatus', error: error.message, durationMs: elapsed }, '[UpdateOrderStatus] Error');
-    res.status(500).json({ success: false, message: 'Failed to update order status' });
+    logger.error(
+      {
+        controller: "updateOrderStatus",
+        userId,
+        orderId: id,
+        error: error.message,
+        stack: error.stack,
+        durationMs: elapsed,
+      },
+      "[UpdateOrderStatus] Error updating order status",
+    );
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to update order status" });
   }
 }
 
-// 4. Soft Delete Order
-export async function deleteOrder(req: AuthRequest, res: Response): Promise<void> {
+export async function deleteOrder(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
   const startTime = Date.now();
   const { id } = req.params;
   const userId = req.user?.id;
 
-  logger.info({ controller: 'deleteOrder', id, userId }, '[DeleteOrder] Started');
+  logger.info(
+    { controller: "deleteOrder", userId, orderId: id },
+    "[DeleteOrder] Started",
+  );
+
+  if (!id) {
+    logger.warn(
+      { controller: "deleteOrder", userId },
+      "[DeleteOrder] Validation failed: id missing",
+    );
+    res.status(400).json({ success: false, message: "Order ID is required" });
+    return;
+  }
 
   try {
     const result = await pool.query(
@@ -246,21 +426,47 @@ export async function deleteOrder(req: AuthRequest, res: Response): Promise<void
        SET is_deleted = TRUE, deleted_at = CURRENT_TIMESTAMP, updated_by = $1
        WHERE id = $2 AND is_deleted = FALSE
        RETURNING id`,
-      [userId, id]
+      [userId, id],
     );
 
     if (result.rows.length === 0) {
-      res.status(404).json({ success: false, message: 'Order not found or already deleted' });
+      const elapsed = Date.now() - startTime;
+      logger.warn(
+        { controller: "deleteOrder", userId, orderId: id, durationMs: elapsed },
+        "[DeleteOrder] Order not found or already deleted",
+      );
+      res
+        .status(404)
+        .json({
+          success: false,
+          message: "Order not found or already deleted",
+        });
       return;
     }
 
     const elapsed = Date.now() - startTime;
-    logger.info({ controller: 'deleteOrder', id, durationMs: elapsed }, '[DeleteOrder] Completed');
+    logger.info(
+      { controller: "deleteOrder", userId, orderId: id, durationMs: elapsed },
+      "[DeleteOrder] Completed successfully",
+    );
 
-    res.json({ success: true, message: 'Order deleted successfully (soft delete)' });
+    res.json({
+      success: true,
+      message: "Order deleted successfully (soft delete)",
+    });
   } catch (error: any) {
     const elapsed = Date.now() - startTime;
-    logger.error({ controller: 'deleteOrder', id, error: error.message, durationMs: elapsed }, '[DeleteOrder] Error');
-    res.status(500).json({ success: false, message: 'Failed to delete order' });
+    logger.error(
+      {
+        controller: "deleteOrder",
+        userId,
+        orderId: id,
+        error: error.message,
+        stack: error.stack,
+        durationMs: elapsed,
+      },
+      "[DeleteOrder] Error soft-deleting order",
+    );
+    res.status(500).json({ success: false, message: "Failed to delete order" });
   }
 }
