@@ -30,6 +30,6 @@ router.post('/reset-password', authLimiter, resetPassword);
 
 // Google OAuth
 router.get('/google/url', getGoogleAuthUrl);
-router.get('/google/callback', googleCallback);
+router.get('/callback/google', googleCallback);
 
 export default router;
