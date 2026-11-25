@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from "express";
 import {
   requestSignupOtp,
   signup,
@@ -9,27 +9,28 @@ import {
   resetPassword,
   getGoogleAuthUrl,
   googleCallback,
-} from '../controllers/authController.js';
-import { authMiddleware } from '../middleware/auth.js';
-import { authLimiter } from '../middleware/rateLimiter.js';
+  getAllUsers,
+} from "../controllers/authController.js";
+import { authMiddleware } from "../middleware/auth.js";
+import { authLimiter } from "../middleware/rateLimiter.js";
 
 const router = Router();
 
 // OTP-based Signup verification flow
-router.post('/signup-otp', authLimiter, requestSignupOtp);
-router.post('/signup', authLimiter, signup);
+router.post("/signup-otp", authLimiter, requestSignupOtp);
+router.post("/signup", authLimiter, signup);
 
 // Standard credentials auth
-router.post('/login', authLimiter, login);
-router.post('/logout', logout);
-router.get('/me', authMiddleware, getMe);
+router.post("/login", authLimiter, login);
+router.post("/logout", logout);
+router.get("/me", authMiddleware, getMe);
 
 // Password recovery
-router.post('/forgot-password', authLimiter, forgotPassword);
-router.post('/reset-password', authLimiter, resetPassword);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/reset-password", authLimiter, resetPassword);
 
 // Google OAuth
-router.get('/google/url', getGoogleAuthUrl);
-router.get('/callback/google', googleCallback);
+router.get("/google/url", getGoogleAuthUrl);
+router.get("/callback/google", googleCallback);
 
 export default router;

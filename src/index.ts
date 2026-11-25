@@ -8,11 +8,13 @@ import hpp from "hpp";
 import { config } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { httpLogger } from "./middleware/requestLogger.js";
-import { generalLimiter } from "./middleware/rateLimiter.js";
+import { authLimiter, generalLimiter } from "./middleware/rateLimiter.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 import authRoutes from "./routes/authRoutes.js";
 import orderRoutes from "./routes/orderRoutes.js";
 import farmRoutes from "./routes/farmRoutes.js";
+import { getAllUsers } from "./controllers/authController.js";
+import { authMiddleware } from "./middleware/auth.js";
 
 const app = express();
 
@@ -93,6 +95,8 @@ app.get("/health", healthHandler);
 app.get("/api/health", healthHandler);
 
 app.use("/api/auth", authRoutes);
+
+app.use("/api/admin/users", authLimiter, authMiddleware, getAllUsers);
 
 app.use("/api/orders", orderRoutes);
 

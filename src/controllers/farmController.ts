@@ -75,13 +75,11 @@ export async function createLivestock(
       { userId, batchId: result.rows[0].id, batchName: batch_name },
       "[Livestock] Batch registered successfully",
     );
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Livestock batch registered successfully",
-        batch: result.rows[0],
-      });
+    res.status(201).json({
+      success: true,
+      message: "Livestock batch registered successfully",
+      batch: result.rows[0],
+    });
   } catch (err: any) {
     logger.error(
       { err: err.message, stack: err.stack, userId, body: req.body },
@@ -138,12 +136,10 @@ export async function updateLivestock(
         { userId, batchId: id },
         "[Livestock] Update failed: batch not found or deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Livestock batch not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Livestock batch not found or already deleted",
+      });
       return;
     }
 
@@ -272,13 +268,11 @@ export async function createFeed(
       { userId, feedId: result.rows[0].id, feedName: feed_name },
       "[Feeds] Feed stock registered",
     );
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Feed stock registered",
-        feed: result.rows[0],
-      });
+    res.status(201).json({
+      success: true,
+      message: "Feed stock registered",
+      feed: result.rows[0],
+    });
   } catch (err: any) {
     logger.error(
       { err: err.message, stack: err.stack, userId, body: req.body },
@@ -319,12 +313,10 @@ export async function updateFeedStock(
         { userId, feedId: id },
         "[Feeds] Update failed: feed not found or deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Feed item not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Feed item not found or already deleted",
+      });
       return;
     }
 
@@ -457,12 +449,10 @@ export async function createExpense(
       { userId, body: req.body },
       "[Expenses] Create failed: missing required fields",
     );
-    res
-      .status(400)
-      .json({
-        success: false,
-        message: "Category, title, and amount are required",
-      });
+    res.status(400).json({
+      success: false,
+      message: "Category, title, and amount are required",
+    });
     return;
   }
 
@@ -486,13 +476,11 @@ export async function createExpense(
       { userId, expenseId: result.rows[0].id, category, amount },
       "[Expenses] Expense logged successfully",
     );
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Expense logged successfully",
-        expense: result.rows[0],
-      });
+    res.status(201).json({
+      success: true,
+      message: "Expense logged successfully",
+      expense: result.rows[0],
+    });
   } catch (err: any) {
     logger.error(
       { err: err.message, stack: err.stack, userId, body: req.body },
@@ -529,12 +517,10 @@ export async function deleteExpense(
         { userId, expenseId: id },
         "[Expenses] Delete failed: expense not found or already deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Expense not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Expense not found or already deleted",
+      });
       return;
     }
 
@@ -606,12 +592,10 @@ export async function updateExpense(
         { userId, expenseId: id },
         "[Expenses] Update failed: expense not found or already deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Expense not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Expense not found or already deleted",
+      });
       return;
     }
 
@@ -668,12 +652,10 @@ export async function deleteLivestock(
         { userId, batchId: id },
         "[Livestock] Delete failed: batch not found or already deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Livestock batch not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Livestock batch not found or already deleted",
+      });
       return;
     }
 
@@ -723,12 +705,10 @@ export async function deleteFeed(
         { userId, feedId: id },
         "[Feeds] Delete failed: feed not found or already deleted",
       );
-      res
-        .status(404)
-        .json({
-          success: false,
-          message: "Feed item not found or already deleted",
-        });
+      res.status(404).json({
+        success: false,
+        message: "Feed item not found or already deleted",
+      });
       return;
     }
 
@@ -823,10 +803,13 @@ export async function getComprehensivePnL(
     `);
 
     const expenseBreakdown = await pool.query(`
-      SELECT category, COALESCE(SUM(amount), 0) AS total_amount, COUNT(id) AS count
+      SELECT 
+        COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized') AS category,
+        COALESCE(SUM(amount), 0)::numeric(12, 2) AS total_amount,
+        COUNT(id)::int AS count
       FROM expenses
       WHERE is_deleted = FALSE
-      GROUP BY category
+      GROUP BY COALESCE(NULLIF(TRIM(category), ''), 'Uncategorized')
       ORDER BY total_amount DESC;
     `);
 
@@ -859,10 +842,14 @@ export async function getComprehensivePnL(
     `);
 
     const orderStatusDistribution = await pool.query(`
-      SELECT order_status, COUNT(id) AS count, COALESCE(SUM(total_amount), 0) AS total_value
+      SELECT 
+        COALESCE(NULLIF(UPPER(TRIM(order_status)), ''), 'UNKNOWN') AS order_status,
+        COUNT(id)::int AS count,
+        COALESCE(SUM(total_amount), 0)::numeric(12, 2) AS total_value
       FROM orders
       WHERE is_deleted = FALSE
-      GROUP BY order_status;
+      GROUP BY COALESCE(NULLIF(UPPER(TRIM(order_status)), ''), 'UNKNOWN')
+      ORDER BY count DESC;
     `);
 
     const flockDistribution = await pool.query(`

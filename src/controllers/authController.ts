@@ -1060,3 +1060,104 @@ export async function googleCallback(
     );
   }
 }
+
+export async function getAllUsers(
+  req: AuthRequest,
+  res: Response,
+): Promise<void> {
+  try {
+    const search =
+      typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const roleParam =
+      typeof req.query.role === "string"
+        ? req.query.role.trim().toLowerCase()
+        : "";
+
+    const conditions: string[] = ["is_deleted = FALSE"];
+    const params: unknown[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = params.length;
+      conditions.push(`(name ILIKE $${idx} OR email ILIKE $${idx})`);
+    }
+
+    if (roleParam === "admin" || roleParam === "user") {
+      params.push(roleParam);
+      conditions.push(`role = $${params.length}`);
+    }
+
+    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+
+    const usersResult = await pool.query(
+      `
+      SELECT
+        id,
+        name,
+        email,
+        avatar_url,
+        COALESCE(NULLIF(LOWER(TRIM(role)), ''), 'user') AS role,
+        created_at,
+        updated_at
+      FROM users
+      ${whereClause}
+      ORDER BY created_at DESC, id DESC;
+      `,
+      params,
+    );
+
+    const statsResult = await pool.query(`
+      SELECT
+        COUNT(*)::int AS total_users,
+        COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(role, 'user'))) = 'admin')::int AS admin_users,
+        COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(role, 'user'))) = 'user')::int AS standard_users
+      FROM users
+      WHERE is_deleted = FALSE;
+    `);
+
+    const users = usersResult.rows.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name || "Unnamed User"),
+      email: String(row.email || ""),
+      avatar_url: row.avatar_url ? String(row.avatar_url) : null,
+      role: String(row.role).toLowerCase() === "admin" ? "admin" : "user",
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
+
+    const statsRow = statsResult.rows[0] || {
+      total_users: users.length,
+      admin_users: users.filter((u) => u.role === "admin").length,
+      standard_users: users.filter((u) => u.role === "user").length,
+    };
+
+    logger.info(
+      {
+        userId: req.user?.id,
+        returnedCount: users.length,
+        search: search || undefined,
+        role: roleParam || undefined,
+      },
+      "[GetAllUsers] Users list retrieved successfully",
+    );
+
+    res.json({
+      success: true,
+      users,
+      stats: {
+        totalUsers: Number(statsRow.total_users || 0),
+        adminUsers: Number(statsRow.admin_users || 0),
+        standardUsers: Number(statsRow.standard_users || 0),
+      },
+    });
+  } catch (err: any) {
+    logger.error(
+      { err: err.message, stack: err.stack, userId: req.user?.id },
+      "[GetAllUsers] Error fetching users list",
+    );
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch users",
+    });
+  }
+}
